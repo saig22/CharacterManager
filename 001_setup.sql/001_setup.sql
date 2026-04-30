@@ -1,0 +1,28 @@
+CREATE TABLE IF NOT EXISTS users (
+    user_id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS worlds (
+    world_name VARCHAR(255) PRIMARY KEY,
+    world_description VARCHAR(255) UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS characters (
+    character_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    character_name VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    armor VARCHAR(255) NOT NULL,
+    weapon VARCHAR(255) NOT NULL,
+    inventory VARCHAR(255) NOT NULL,
+    age INT NOT NULL,
+    attributes VARCHAR(255) NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_type (
+    type_name VARCHAR(255) PRIMARY KEY,
+    type_description VARCHAR(255) NOT NULL
+);
