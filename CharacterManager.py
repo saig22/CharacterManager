@@ -17,12 +17,10 @@ def init_db():
     cursor = conn.cursor()
     return cursor, conn
 
-
 def close_db(cursor, conn):
     conn.commit()
     cursor.close()
     conn.close()
-
 
 def fetch_characters(user_id):
     cursor, conn = init_db()
@@ -118,11 +116,11 @@ def get_all_world_counts(world_name=None):
     cursor, conn = init_db()
     try:
         cursor.execute("""
-            SELECT world_name, GetCharacterCount(%s)
+            SELECT GetCharacterCount(%s)
             FROM worlds
-        """), (world_name,)
-        result = dict(cursor.fetchall())
-        return result
+        """, (world_name,)) 
+        result = cursor.fetchone()
+        return result[0]
     except Exception as e:
         print(f"Error fetching world counts: {e}")
         return {}
@@ -142,10 +140,11 @@ def make_linked_dropdowns(parent, all_types, all_worlds,
         f"{w} ({get_all_world_counts(w)})": w
         for w in all_worlds
     }
+
     type_var = tk.StringVar(value=initial_type or (all_types[0] if all_types else ""))
 
     if initial_world:
-        initial_display_world = f"{initial_world} ({world_counts.get(initial_world, 0)})"
+        initial_display_world = f"{initial_world} {world_counts.get(initial_world, 0)}"
     else:
         initial_display_world = display_worlds[0] if display_worlds else ""
 
@@ -404,6 +403,35 @@ def show_character_details(index):
 def open_create_character(user_id):
     open_character_form('create', user_id=user_id)
 
+def setup_admin_view():
+    admin_window = tk.Toplevel()
+    admin_window.title("Admin Panel")
+    tk.Label(admin_window, text="Admin Panel - Manage Types and Worlds").pack(pady=20)
+    cursor, conn = init_db()
+    try:
+        cursor.execute("""
+            SELECT u.username, c.character_name, c.world_name, c.type_name
+            FROM users u
+            JOIN characters c ON u.user_id = c.user_id
+            ORDER BY u.username
+        """)
+        results = cursor.fetchall()
+        if results:
+            for username, character_name, world_name, type_name in results:
+                tk.Label(
+                    admin_window,
+                    text=f"User: {username} | Character: {character_name} | World: {world_name} | Type: {type_name}"
+                ).pack(pady=5)
+        else:
+            tk.Label(admin_window, text="No characters found in the database.").pack(pady=10)
+    
+        close_db(cursor, conn)
+
+    except Exception as e:
+        tk.Label(admin_window, text=f"Error loading admin data: {e}").pack(pady=10)
+
+
+
 
 def setup_character_page(user_id):
     global characters, current_user_id
@@ -418,6 +446,10 @@ def setup_character_page(user_id):
     character_list = tk.Listbox(root, yscrollcommand=scrollbar.set)
     character_list.pack(fill=tk.X, expand=tk.YES, pady=10)
     scrollbar.config(command=character_list.yview)
+
+    if user_id == 1:
+        admin_button = tk.Button(root, text="Admin Panel", command=lambda: setup_admin_view())
+        admin_button.pack(pady=10)
 
     character_list.bind(
         "<Double-Button-1>",
@@ -512,7 +544,7 @@ def setup_login_page():
 
 root = tk.Tk()
 root.title("Character Manager")
-root.geometry("400x300")
+root.geometry("800x800")
 
 setup_login_page()
 

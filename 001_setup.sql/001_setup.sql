@@ -63,16 +63,15 @@ INSERT INTO world_characters (world_name, character_type) VALUES
 ('Post-Apocalyptic Wasteland', 'Rogue');
 
 delimiter $$
-CREATE FUNCTION GetCharacterCount(World_name VARCHAR(255)) RETURNS INT
+CREATE FUNCTION GetCharacterCount(world_names VARCHAR(255)) RETURNS INT
 DETERMINISTIC
 BEGIN
     DECLARE count INT;
-    SELECT COUNT(*) INTO count
+    SELECT COUNT(c.world_name) INTO count
     FROM characters c
-    WHERE c.world_name = World_name;
+    WHERE c.world_name = world_names;
     RETURN count;
 END$$
-
 
 CREATE TRIGGER before_insert_character
 BEFORE INSERT ON characters
