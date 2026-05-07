@@ -5,7 +5,6 @@ from flaskext.mysql import MySQL
 characters = []
 current_user_id = None
 
-
 def init_db():
     app = Flask(__name__)
     mysql = MySQL()
@@ -28,7 +27,17 @@ def close_db(cursor, conn):
 def fetch_characters(user_id):
     cursor, conn = init_db()
     try:
-        cursor.execute("SELECT * FROM characters WHERE user_id = %s", (user_id,))
+        sql_command = (
+            "SELECT c.character_id, c.user_id, c.character_name, c.armor, c.weapon, "
+            "c.inventory, c.age, c.world_name, c.type_name, "
+            "GROUP_CONCAT(a.attribute SEPARATOR ', ') "
+            "FROM characters c "
+            "LEFT JOIN character_attributes a ON c.character_id = a.character_id "
+            "WHERE c.user_id = %s "
+            "GROUP BY c.character_id"
+
+        )
+        cursor.execute(sql_command, (user_id,))
         return cursor.fetchall()
     except Exception as e:
         print(f"Error: {e}")
@@ -56,6 +65,21 @@ def fetch_all_worlds():
         return [row[0] for row in cursor.fetchall()]
     except Exception as e:
         print(f"Error fetching worlds: {e}")
+        return []
+    finally:
+        close_db(cursor, conn)
+
+
+def fetch_attributes_for_character(character_id):
+    cursor, conn = init_db()
+    try:
+        cursor.execute(
+            "SELECT attribute FROM character_attributes WHERE character_id = %s",
+            (character_id,)
+        )
+        return [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error fetching attributes: {e}")
         return []
     finally:
         close_db(cursor, conn)
@@ -90,25 +114,52 @@ def fetch_types_for_world(world_name):
     finally:
         close_db(cursor, conn)
 
+def get_all_world_counts(world_name=None):
+    cursor, conn = init_db()
+    try:
+        cursor.execute("""
+            SELECT world_name, GetCharacterCount(%s)
+            FROM worlds
+        """), (world_name,)
+        result = dict(cursor.fetchall())
+        return result
+    except Exception as e:
+        print(f"Error fetching world counts: {e}")
+        return {}
+    finally:
+        close_db(cursor, conn)
 
 def make_linked_dropdowns(parent, all_types, all_worlds,
                           initial_type=None, initial_world=None):
+    
+    world_counts = get_all_world_counts()
 
-    type_var  = tk.StringVar(value=initial_type  or (all_types[0]  if all_types  else ""))
-    world_var = tk.StringVar(value=initial_world or (all_worlds[0] if all_worlds else ""))
+    display_worlds = [
+        f"{w} ({get_all_world_counts(w)})" for w in all_worlds
+    ]
 
+    display_to_real = {
+        f"{w} ({get_all_world_counts(w)})": w
+        for w in all_worlds
+    }
+    type_var = tk.StringVar(value=initial_type or (all_types[0] if all_types else ""))
+
+    if initial_world:
+        initial_display_world = f"{initial_world} ({world_counts.get(initial_world, 0)})"
+    else:
+        initial_display_world = display_worlds[0] if display_worlds else ""
+
+    world_var = tk.StringVar(value=initial_display_world)
 
     type_frame = tk.Frame(parent)
     type_frame.pack(pady=5, padx=10)
     tk.Label(type_frame, text="Type:", width=12, anchor=tk.W).pack(side=tk.LEFT, padx=5)
     tk.OptionMenu(type_frame, type_var, *all_types).pack(side=tk.LEFT, padx=5)
 
-
     world_frame = tk.Frame(parent)
     world_frame.pack(pady=5, padx=10)
     tk.Label(world_frame, text="World:", width=12, anchor=tk.W).pack(side=tk.LEFT, padx=5)
-    tk.OptionMenu(world_frame, world_var, *all_worlds).pack(side=tk.LEFT, padx=5)
-
+    tk.OptionMenu(world_frame, world_var, *display_worlds).pack(side=tk.LEFT, padx=5)
 
     warn_var = tk.StringVar(value="")
     tk.Label(parent, textvariable=warn_var, fg="orange",
@@ -116,12 +167,17 @@ def make_linked_dropdowns(parent, all_types, all_worlds,
 
     def _check_compatibility(*_):
         t = type_var.get()
-        w = world_var.get()
+
+        w_display = world_var.get()
+        w = display_to_real.get(w_display, w_display)
+
         if not t or not w:
             warn_var.set("")
             return
+
         allowed_worlds = fetch_worlds_for_type(t)
-        allowed_types  = fetch_types_for_world(w)
+        allowed_types = fetch_types_for_world(w)
+
         if allowed_worlds and w not in allowed_worlds:
             warn_var.set(
                 f"Warning: '{w}' is not available for type '{t}'. "
@@ -135,14 +191,17 @@ def make_linked_dropdowns(parent, all_types, all_worlds,
         else:
             warn_var.set("")
 
-    type_var.trace_add("write",  _check_compatibility)
+    type_var.trace_add("write", _check_compatibility)
     world_var.trace_add("write", _check_compatibility)
     _check_compatibility()
 
     def is_compatible():
         return warn_var.get() == ""
 
-    return type_var, world_var, is_compatible
+    def get_selected_world():
+        return display_to_real.get(world_var.get(), world_var.get())
+
+    return type_var, world_var, get_selected_world, is_compatible
 
 
 def refresh_character_page():
@@ -151,93 +210,156 @@ def refresh_character_page():
     if current_user_id:
         setup_character_page(current_user_id)
 
-
-def edit_character(character_id, details_window):
-    global characters
-
-    character = next((c for c in characters if c["id"] == character_id), None)
-    if not character:
-        return
-
-    edit_window = tk.Toplevel()
-    edit_window.title("Edit Character")
+def open_character_form(mode, user_id=None, character=None, details_window=None):
+    window = tk.Toplevel()
+    window.title("Create New Character" if mode == 'create' else "Edit Character")
 
     plain_fields = [
         ("Name",       "character_name"),
         ("Armor",      "armor"),
         ("Weapon",     "weapon"),
         ("Inventory",  "inventory"),
-        ("Attributes", "attributes"),
     ]
 
-
-    
     entries = {}
-    for label_text, key in plain_fields:
-        frame = tk.Frame(edit_window)
+    for label, key in plain_fields:
+        frame = tk.Frame(window)
         frame.pack(pady=5, padx=10)
-        tk.Label(frame, text=f"{label_text}:", width=12, anchor=tk.W).pack(side=tk.LEFT, padx=5)
+        tk.Label(frame, text=label + ":", width=12, anchor=tk.W).pack(side=tk.LEFT, padx=5)
         entry = tk.Entry(frame, width=30)
         entry.pack(side=tk.LEFT, padx=5)
-        entry.insert(0, str(character.get(key, "")))
+        if mode == 'edit':
+            entry.insert(0, str(character.get(key, "")))
         entries[key] = entry
 
-    frame = tk.Frame(edit_window)
+    frame = tk.Frame(window)
     frame.pack(pady=5, padx=10)
     age_label = tk.Label(frame, text="Age:", width=12, anchor=tk.W)
     age_label.pack(side=tk.LEFT, padx=5)
     age_entry = tk.Spinbox(frame, from_=0, to=1000, width=5)
     age_entry.pack(side=tk.LEFT, padx=5)
-    age_entry.delete(0, tk.END)
-    age_entry.insert(0, str(character.get("age", 0)))
+    if mode == 'edit':
+        age_entry.delete(0, tk.END)
+        age_entry.insert(0, str(character.get("age", 0)))
+
+    attr_frame = tk.Frame(window)
+    attr_frame.pack(pady=5, padx=10, fill=tk.X)
+    tk.Label(attr_frame, text="Attributes:", width=12, anchor=tk.NW).pack(side=tk.LEFT, padx=5, pady=5)
+    attrs_container = tk.Frame(attr_frame)
+    attrs_container.pack(side=tk.LEFT, padx=5)
+
+    attribute_entries = []
+
+    def add_attribute_entry(value=""):
+        entry = tk.Entry(attrs_container, width=30)
+        entry.pack(pady=2)
+        entry.insert(0, value)
+
+        def _on_enter(event, ent=entry):
+            if not ent.get().strip():
+                return
+            if ent is attribute_entries[-1]:
+                add_attribute_entry("")
+
+        entry.bind("<Return>", _on_enter)
+        attribute_entries.append(entry)
+        return entry
+
+    if mode == 'edit':
+        for attr in fetch_attributes_for_character(character['id']):
+            add_attribute_entry(attr)
+        add_attribute_entry("")
+    else:
+        add_attribute_entry("")
 
     all_types  = fetch_all_types()
     all_worlds = fetch_all_worlds()
-
-    type_var, world_var, is_compatible = make_linked_dropdowns(
-        edit_window, all_types, all_worlds,
-        initial_type=character.get("type_name"),
-        initial_world=character.get("world_name"),
+    initial_type = character.get("type_name") if mode == 'edit' else None
+    initial_world = character.get("world_name") if mode == 'edit' else None
+    type_var, world_var, get_selected_world, is_compatible = make_linked_dropdowns(
+        window, all_types, all_worlds,
+        initial_type=initial_type,
+        initial_world=initial_world,
     )
 
-    err_label = tk.Label(edit_window, text="", fg="red", wraplength=340)
+    err_label = tk.Label(window, text="", fg="red", wraplength=340)
     err_label.pack(padx=10)
 
-    def save_changes():
+    def save():
         if not is_compatible():
             err_label.config(text="Cannot save: resolve the Type / World incompatibility first.")
             return
         err_label.config(text="")
 
-        updated = {key: entries[key].get() for _, key in plain_fields}
-        updated["age"]        = age_entry.get()
-        updated["type_name"]  = type_var.get()
-        updated["world_name"] = world_var.get()
+        data = {key: entries[key].get() for _, key in plain_fields}
+        attrs = [entry.get().strip() for entry in attribute_entries if entry.get().strip()]
+        data["attributes"] = "; ".join(attrs)
+        data["age"]        = age_entry.get()
+        data["type_name"]  = type_var.get()
+        data["world_name"] = get_selected_world()
 
         cursor, conn = init_db()
         try:
-            cursor.execute(
-                "UPDATE characters SET character_name=%s, armor=%s, weapon=%s, "
-                "inventory=%s, age=%s, attributes=%s, world_name=%s, type_name=%s "
-                "WHERE character_id=%s",
-                (
-                    updated["character_name"], updated["armor"],    updated["weapon"],
-                    updated["inventory"],      updated["age"],      updated["attributes"],
-                    updated["world_name"],     updated["type_name"], character_id,
-                ),
-            )
+            if mode == 'create':
+                cursor.execute(
+                    "INSERT INTO characters "
+                    "(user_id, character_name, armor, weapon, inventory, age, world_name, type_name) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        user_id,
+                        data["character_name"], data["armor"],
+                        data["weapon"], data["inventory"],
+                        data["age"], data["world_name"], data["type_name"],
+    
+                    )
+                )
+                cursor.execute("SELECT LAST_INSERT_ID()")
+                character_id = cursor.fetchone()[0]
+                for attr in attrs:
+                    cursor.execute(
+                        "INSERT INTO character_attributes (character_id, attribute) VALUES (%s, %s)",
+                        (character_id, attr)
+                    )
+                window.destroy()
+                root.after(500, refresh_character_page)
+            else:
+                cursor.execute(
+                    "UPDATE characters SET character_name=%s, armor=%s, weapon=%s, "
+                    "inventory=%s, age=%s, world_name=%s, type_name=%s "
+                    "WHERE character_id=%s",
+                    (
+                        data["character_name"], data["armor"],data["weapon"],
+                        data["inventory"], data["age"],
+                        data["world_name"], data["type_name"], character['id']
+                    ),
+                )
+                cursor.execute(
+                    "DELETE FROM character_attributes WHERE character_id = %s",
+                    (character['id'],)
+                )
+                for attr in attrs:
+                    cursor.execute(
+                        "INSERT INTO character_attributes (character_id, attribute) VALUES (%s, %s)",
+                        (character['id'], attr)
+                    )
+                character.update(data)
+                window.destroy()
+                if details_window:
+                    details_window.destroy()
+                refresh_character_page()
         except Exception as e:
-            err_label.config(text=f"Error saving character: {e}")
-            return
+            err_label.config(text=f"Error: {type(e).__name__}: {e}")
         finally:
             close_db(cursor, conn)
 
-        character.update(updated)
-        edit_window.destroy()
-        details_window.destroy()
-        refresh_character_page()
+    tk.Button(window, text="Save Character" if mode == 'create' else "Save Changes", command=save).pack(pady=10)
 
-    tk.Button(edit_window, text="Save Changes", command=save_changes).pack(pady=10)
+def edit_character(character_id, details_window):
+    global characters
+    character = next((c for c in characters if c["id"] == character_id), None)
+    if not character:
+        return
+    open_character_form('edit', character=character, details_window=details_window)
 
 
 def delete_character(character_id, details_window):
@@ -280,75 +402,7 @@ def show_character_details(index):
 
 
 def open_create_character(user_id):
-    create_window = tk.Toplevel()
-    create_window.title("Create New Character")
-
-    plain_fields = [
-        ("Name",       "character_name"),
-        ("Armor",      "armor"),
-        ("Weapon",     "weapon"),
-        ("Inventory",  "inventory"),
-        ("Attributes", "attributes"),
-    ]
-
-    entries = {}
-
-    for label, key in plain_fields:
-        frame = tk.Frame(create_window)
-        frame.pack(pady=5, padx=10)
-        tk.Label(frame, text=label + ":", width=12, anchor=tk.W).pack(side=tk.LEFT, padx=5)
-        entry = tk.Entry(frame, width=30)
-        entry.pack(side=tk.LEFT, padx=5)
-        entries[key] = entry
-
-    frame = tk.Frame(create_window)
-    frame.pack(pady=5, padx=10)
-
-    age_label = tk.Label(frame, text="Age:", width=12, anchor=tk.W)
-    age_label.pack(side=tk.LEFT, padx=5)
-    age_entry = tk.Spinbox(frame, from_=0, to=1000, width=5)
-    age_entry.pack(side=tk.LEFT, padx=5)
-    all_types  = fetch_all_types()
-    all_worlds = fetch_all_worlds()
-    type_var, world_var, is_compatible = make_linked_dropdowns(create_window, all_types, all_worlds)
-
-    err_label = tk.Label(create_window, text="", fg="red", wraplength=340)
-    err_label.pack(padx=10)
-
-    def save_character():
-        if not is_compatible():
-            err_label.config(text="Cannot save: resolve the Type / World incompatibility first.")
-            return
-        err_label.config(text="")
-
-        character_data = {key: entries[key].get() for _, key in plain_fields}
-        character_data["age"]        = age_entry.get()
-        character_data["type_name"]  = type_var.get()
-        character_data["world_name"] = world_var.get()
-
-        cursor, conn = init_db()
-        try:
-            cursor.execute(
-                "INSERT INTO characters "
-                "(user_id, character_name, armor, weapon, inventory, age, attributes, world_name, type_name) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (
-                    user_id,
-                    character_data["character_name"], character_data["armor"],
-                    character_data["weapon"],         character_data["inventory"],
-                    character_data["age"],            character_data["attributes"],
-                    character_data["world_name"],     character_data["type_name"],
-                )
-            )
-
-            create_window.destroy()
-            root.after(500, refresh_character_page)
-        except Exception as e:
-            err_label.config(text=f"Error: {e}")
-        finally:
-            close_db(cursor, conn)
-
-    tk.Button(create_window, text="Save Character", command=save_character).pack(pady=10)
+    open_character_form('create', user_id=user_id)
 
 
 def setup_character_page(user_id):
@@ -379,13 +433,13 @@ def setup_character_page(user_id):
             "weapon":         character[4],
             "inventory":      character[5],
             "age":            character[6],
-            "attributes":     character[7],
-            "world_name":     character[8],
-            "type_name":      character[9],
+            "world_name":     character[7],
+            "type_name":      character[8],
+            "attributes":     character[9] or "",
         })
         character_list.insert(
             tk.END,
-            f"Name: {character[2]} | Age: {character[6]} | Type: {character[9]} | World: {character[8]}"
+            f"Name: {character[2]} | Age: {character[6]} | Type: {character[8]} | World: {character[7]}"
         )
 
     tk.Button(root, text="Create New Character",
@@ -422,7 +476,6 @@ def login_user(username, top_ref):
     finally:
         close_db(cursor, conn)
 
-
 def sign_up():
     top = tk.Toplevel()
     top.title("Sign Up")
@@ -437,7 +490,6 @@ def sign_up():
         top, text="Sign Up",
         command=lambda: register_user(email_input.get() or None, username_input.get() or None, top)
     ).pack(pady=10)
-
 
 def log_in():
     top = tk.Toplevel()

@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS characters (
     weapon VARCHAR(255) NOT NULL,
     inventory VARCHAR(255) NOT NULL,
     age INT NOT NULL,
-    attributes VARCHAR(255) NOT NULL,
     world_name VARCHAR(255) NOT NULL,
     type_name VARCHAR(255) NOT NULL,
     FOREIGN KEY (world_name) REFERENCES worlds(world_name) ON DELETE CASCADE,
@@ -34,8 +33,9 @@ CREATE TABLE IF NOT EXISTS characters (
 );
 
 CREATE TABLE IF NOT EXISTS character_attributes (
-    character_id INT PRIMARY KEY,
+    character_id INT,
     attribute varchar(255) NOT NULL,
+    PRIMARY KEY (character_id, attribute),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -63,6 +63,17 @@ INSERT INTO world_characters (world_name, character_type) VALUES
 ('Post-Apocalyptic Wasteland', 'Rogue');
 
 delimiter $$
+CREATE FUNCTION GetCharacterCount(World_name VARCHAR(255)) RETURNS INT
+DETERMINISTIC
+BEGIN
+    DECLARE count INT;
+    SELECT COUNT(*) INTO count
+    FROM characters c
+    WHERE c.world_name = World_name;
+    RETURN count;
+END$$
+
+
 CREATE TRIGGER before_insert_character
 BEFORE INSERT ON characters
 FOR EACH ROW
@@ -94,5 +105,5 @@ BEGIN
 END$$
 delimiter ;
 
-INSERT INTO characters (user_id, world_name, type_name, character_name, armor, weapon, inventory, age, attributes) VALUES
-(1, 'Fantasy Realm', 'Warrior', 'Aragorn', 'Plate Armor', 'Longsword', 'Health Potion, Gold Coins', 87, 'Strength: 90, Dexterity: 75, Intelligence: 60');
+INSERT INTO characters (user_id, world_name, type_name, character_name, armor, weapon, inventory, age) VALUES
+(1, 'Fantasy Realm', 'Warrior', 'Aragorn', 'Plate Armor', 'Longsword', 'Health Potion, Gold Coins', 87);
